@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="container section">
+  <h2>Mi panel</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>Resumen</h3>
+      <p>BMR: <strong>{{ calc.bmr }}</strong> kcal — TDEE: <strong>{{ calc.tdee }}</strong> kcal</p>
+      <p>Macros sugeridos: Prot <strong>{{ calc.p }}</strong> g · Grasa <strong>{{ calc.f }}</strong> g · CHO <strong>{{ calc.c }}</strong> g</p>
+    </div>
+    <div class="card">
+      <h3>Registrar peso</h3>
+      <form method="post">
+        <input type="hidden" name="weight_entry" value="1">
+        <div class="grid2">
+          <div class="field"><label>Peso (kg)</label><input name="weight_entry" type="number" step="0.1" required></div>
+        </div>
+        <button class="btn primary">Guardar</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card section">
+    <h3>Progreso (peso)</h3>
+    <canvas id="wChart" height="110"></canvas>
+  </div>
+
+  <div class="card section">
+    <h3>Subir comida (foto)</h3>
+    <form method="post" enctype="multipart/form-data">
+      <div class="field"><input type="file" name="meal_photo" accept="image/*" required></div>
+      <div class="field"><textarea name="meal_comment" placeholder="Descripción opcional"></textarea></div>
+      <button class="btn ghost">Subir</button>
+    </form>
+    <div class="meals section">
+      {% for m in meals %}
+        <div>
+          <img src="/{{ m.image_path }}" alt="comida">
+          <div class="status">{{ m.created_at[:16].replace('T',' ') }} — {{ m.comment or '' }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const ctx = document.getElementById('wChart');
+const labels = [{% for w in weights %}'{{ w.created_at[:10] }}',{% endfor %}];
+const data = [{% for w in weights %}{{ w.weight_kg }},{% endfor %}];
+if (ctx){
+  new Chart(ctx, {
+    type:'line',
+    data:{labels, datasets:[{label:'Peso (kg)', data, tension:0.25}]},
+    options:{responsive:true, maintainAspectRatio:false}
+  });
+}
+</script>
+{% endblock %}

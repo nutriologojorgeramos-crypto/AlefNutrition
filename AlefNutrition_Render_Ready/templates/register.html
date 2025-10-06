@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="container section">
+  <h2>Crear cuenta de paciente</h2>
+  <form method="post" class="form card">
+    <div class="field"><label>Nombre</label><input name="name" required></div>
+    <div class="field"><label>Email</label><input type="email" name="email" required></div>
+    <div class="field"><label>Contraseña</label><input type="password" name="password" required></div>
+    <div class="grid2">
+      <div class="field"><label>Edad</label><input type="number" name="age" min="0" required></div>
+      <div class="field">
+        <label>Sexo</label>
+        <select name="sex">
+          <option value="F">Femenino</option>
+          <option value="M">Masculino</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Altura (cm)</label><input type="number" name="height_cm" step="0.1" required></div>
+      <div class="field"><label>Peso (kg)</label><input type="number" name="weight_kg" step="0.1" required></div>
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label>Nivel de actividad</label>
+        <select name="activity">
+          <option value="sedentary">Sedentario</option>
+          <option value="light">Ligero (1-3 d/sem)</option>
+          <option value="moderate">Moderado (3-5 d/sem)</option>
+          <option value="active">Activo (6-7 d/sem)</option>
+          <option value="very_active">Muy activo</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Objetivo</label>
+        <select name="goal">
+          <option value="maintain">Mantener</option>
+          <option value="lose">Bajar</option>
+          <option value="gain">Subir</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn primary" type="submit">Crear cuenta</button>
+  </form>
+</section>
+{% endblock %}

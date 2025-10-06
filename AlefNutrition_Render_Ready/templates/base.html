@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title if title else "AlefNutrition – Nut. Jorge Ramos" }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%232a9d6f'/><path d='M18 40 L32 16 L46 40' fill='none' stroke='white' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/><circle cx='32' cy='44' r='3' fill='white'/></svg>">
+</head>
+<body>
+  <header class="header">
+    <div class="container nav">
+      <a class="brand" href="{{ url_for('landing') }}">
+        <div class="logo">A</div>
+        <span>AlefNutrition – Nut. Jorge Ramos</span>
+      </a>
+      <nav class="primary-nav">
+        <a href="{{ url_for('landing') }}">Inicio</a>
+        <a href="{{ url_for('register') }}">Registrarse</a>
+        <a href="{{ url_for('login') }}" class="btn">Entrar</a>
+      </nav>
+    </div>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <div class="container section">
+      {% for cat, msg in messages %}
+      <div class="alert {{ 'ok' if cat=='ok' else '' }}">{{ msg }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+
+  <footer class="footer">
+    <div class="container">© 2025 AlefNutrition – Nut. Jorge Ramos</div>
+  </footer>
+</body>
+</html>

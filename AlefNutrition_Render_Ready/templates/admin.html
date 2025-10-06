@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="container section">
+  <h2>Panel del Nutriólogo</h2>
+  {% for row in data %}
+    {% set p = row.patient %}
+    <div class="card section">
+      <div style="display:flex; justify-content:space-between; gap:10px; align-items:center; flex-wrap:wrap">
+        <div>
+          <h3>{{ p.name or p.email }}</h3>
+          <div class="status">Edad {{ p.age or '-' }} · Sexo {{ p.sex or '-' }} · Altura {{ p.height_cm or '-' }} cm · Último peso {{ row.last_weight or '-' }} kg</div>
+          <div class="status">TDEE {{ row.calc.tdee }} kcal · Prot {{ row.calc.p }} g · Grasa {{ row.calc.f }} g · CHO {{ row.calc.c }} g</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <a class="btn ghost" href="{{ url_for('admin_report', pid=p.id) }}">Descargar PDF</a>
+        </div>
+      </div>
+
+      <div class="grid2 section">
+        <div>
+          <h4>Últimas notas</h4>
+          <table class="table">
+            <tr><th>Fecha</th><th>Nota</th></tr>
+            {% for n in row.notes %}
+              <tr><td>{{ n.created_at[:16].replace('T',' ') }}</td><td>{{ n.content }}</td></tr>
+            {% endfor %}
+          </table>
+          <form method="post" class="form" style="margin-top:10px">
+            <input type="hidden" name="action" value="add_note">
+            <input type="hidden" name="patient_id" value="{{ p.id }}">
+            <textarea name="content" placeholder="Añadir observación..." required></textarea>
+            <button class="btn primary">Guardar nota</button>
+          </form>
+        </div>
+        <div>
+          <h4>Últimas comidas</h4>
+          <div class="meals">
+            {% for m in row.meals %}
+              <img src="/{{ m.image_path }}" alt="meal">
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</section>
+{% endblock %}
