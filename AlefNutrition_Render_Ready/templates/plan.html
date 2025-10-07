@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="container section">
+  <h2>Menú semanal — {{ patient.name or patient.email }}</h2>
+  <p class="lead">Objetivo diario: TDEE {{ calc.tdee }} kcal · Prot {{ calc.p }} g · Grasa {{ calc.f }} g · CHO {{ calc.c }} g</p>
+
+  {% if who == 'admin' %}
+  <form method="post" class="form card">
+    <p>Genera/actualiza un menú de 7 días en base al TDEE y macros del paciente.</p>
+    <button class="btn primary" type="submit">Generar nuevo menú</button>
+  </form>
+  {% endif %}
+
+  {% if plan %}
+    {% for day in plan.days %}
+      <div class="card" style="margin-top:14px">
+        <h3>Día {{ loop.index }}</h3>
+        <table class="table">
+          <tr><th>Tiempo</th><th>Comida</th><th>Porción</th><th>Kcal</th><th>P</th><th>C</th><th>G</th></tr>
+          {% for slot in ["desayuno","comida","cena","snack"] %}
+            {% set it = day[slot] %}
+            <tr>
+              <td>{{ slot|capitalize }}</td>
+              <td>{{ it.name }}</td>
+              <td>{{ it.portion }}x</td>
+              <td>{{ it.kcal }}</td>
+              <td>{{ it.prot }}</td>
+              <td>{{ it.carb }}</td>
+              <td>{{ it.fat }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="card"><p>No hay menú guardado aún.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

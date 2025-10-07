@@ -1,7 +1,8 @@
 import os
 import sqlite3
+import json
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, abort
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, abort, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -62,6 +63,61 @@ def calculate_tdee(sex, age, height_cm, weight_kg, activity, goal):
 
     return round(bmr), round(tdee), protein_g, fat_g, carbs_g
 
+def _food_catalog():
+    # catálogo simple (puedes ampliarlo luego)
+    return {
+        "desayuno": [
+            {"name":"Avena con leche", "kcal":250, "prot":10, "carb":40, "fat":6},
+            {"name":"Huevos revueltos + tortillas", "kcal":300, "prot":18, "carb":20, "fat":14},
+            {"name":"Yogur griego + fruta", "kcal":220, "prot":18, "carb":28, "fat":4}
+        ],
+        "comida": [
+            {"name":"Pollo a la plancha + arroz + ensalada", "kcal":600, "prot":40, "carb":65, "fat":16},
+            {"name":"Pescado + puré + verduras", "kcal":550, "prot":35, "carb":50, "fat":18},
+            {"name":"Carne magra + quinoa + ensalada", "kcal":650, "prot":42, "carb":60, "fat":20}
+        ],
+        "cena": [
+            {"name":"Atún con tostadas + aguacate", "kcal":450, "prot":32, "carb":35, "fat":18},
+            {"name":"Tostadas de pollo + pico de gallo", "kcal":420, "prot":30, "carb":40, "fat":12},
+            {"name":"Ensalada grande + queso panela", "kcal":380, "prot":24, "carb":30, "fat":14}
+        ],
+        "snack": [
+            {"name":"Fruta + nueces", "kcal":180, "prot":4, "carb":22, "fat":10},
+            {"name":"Barra de proteína", "kcal":200, "prot":20, "carb":15, "fat":6},
+            {"name":"Galletas de arroz + crema de cacahuate", "kcal":190, "prot":6, "carb":22, "fat":8}
+        ]
+    }
+
+def build_week_plan(tdee, p_g, f_g, c_g):
+    import random
+    cat = _food_catalog()
+    days = []
+    # reparto aproximado de kcal por tiempo
+    targets = {"desayuno":0.25, "comida":0.35, "cena":0.25, "snack":0.15}
+    for d in range(7):
+        day = {}
+        for slot in ["desayuno","comida","cena","snack"]:
+            target = tdee*targets[slot]
+            # elige 1 item y ajusta porciones simple (1.0x, 1.5x, 0.75x)
+            item = random.choice(cat[slot]).copy()
+            # factor de porción
+            factor = max(min(target / max(item["kcal"],1), 1.6), 0.7)
+            factor = round(factor,2)
+            item["portion"] = factor
+            item["kcal"] = round(item["kcal"]*factor)
+            item["prot"] = round(item["prot"]*factor)
+            item["carb"] = round(item["carb"]*factor)
+            item["fat"]  = round(item["fat"]*factor)
+            day[slot] = item
+        days.append(day)
+    totals = {
+        "kcal": sum(sum(d[slot]["kcal"] for slot in d) for d in days),
+        "prot": sum(sum(d[slot]["prot"] for slot in d) for d in days),
+        "carb": sum(sum(d[slot]["carb"] for slot in d) for d in days),
+        "fat":  sum(sum(d[slot]["fat"] for slot in d) for d in days)
+    }
+    return {"days":days, "totals":totals, "tdee":tdee, "p_g":p_g, "f_g":f_g, "c_g":c_g}
+
 # -------- DB Setup --------
 def init_db():
     conn = get_db()
@@ -102,6 +158,13 @@ def init_db():
         created_at TEXT,
         FOREIGN KEY(user_id) REFERENCES users(id)
     )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS mealplans(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        plan_json TEXT,
+        created_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )""")
     # seed admin if not exists
     cur.execute("SELECT id FROM users WHERE email=?", ("admin@alefnutrition.com",))
     if not cur.fetchone():
@@ -113,6 +176,46 @@ def init_db():
 init_db()
 
 # -------- Routes --------
+
+@app.route('/admin/plan/<int:pid>', methods=['GET','POST'])
+def admin_plan(pid):
+    user = current_user()
+    if not user or user['role'] != 'admin':
+        return redirect(url_for('login'))
+    conn = get_db()
+    p = conn.execute('SELECT * FROM users WHERE id=?', (pid,)).fetchone()
+    if not p:
+        conn.close(); abort(404)
+    # calcular macros actuales
+    bmr, tdee, pr, fa, ca = calculate_tdee(p['sex'] or 'F', p['age'] or 0, p['height_cm'] or 0, p['weight_kg'] or 0, p['activity'] or 'sedentary', p['goal'] or 'maintain')
+    # POST = generar y guardar
+    if request.method == 'POST':
+        plan = build_week_plan(tdee, pr, fa, ca)
+        conn.execute('DELETE FROM mealplans WHERE user_id=?', (pid,))
+        conn.execute('INSERT INTO mealplans(user_id, plan_json, created_at) VALUES (?,?,?)',
+                     (pid, json.dumps(plan, ensure_ascii=False), datetime.utcnow().isoformat()))
+        conn.commit()
+        conn.close()
+        flash('Menú semanal generado.', 'ok')
+        return redirect(url_for('admin_plan', pid=pid))
+    # GET = mostrar si existe
+    row = conn.execute('SELECT plan_json, created_at FROM mealplans WHERE user_id=? ORDER BY id DESC LIMIT 1', (pid,)).fetchone()
+    conn.close()
+    plan = json.loads(row['plan_json']) if row else None
+    return render_template('plan.html', who='admin', patient=p, plan=plan, calc={'tdee':tdee,'p':pr,'f':fa,'c':ca})
+
+@app.route('/plan')
+def patient_plan():
+    u = current_user()
+    if not u or u['role']!='patient':
+        return redirect(url_for('login'))
+    conn = get_db()
+    row = conn.execute('SELECT plan_json, created_at FROM mealplans WHERE user_id=? ORDER BY id DESC LIMIT 1', (u['id'],)).fetchone()
+    conn.close()
+    plan = json.loads(row['plan_json']) if row else None
+    # calcular macros del paciente
+    bmr, tdee, pr, fa, ca = calculate_tdee(u['sex'] or 'F', u['age'] or 0, u['height_cm'] or 0, u['weight_kg'] or 0, u['activity'] or 'sedentary', u['goal'] or 'maintain')
+    return render_template('plan.html', who='patient', patient=u, plan=plan, calc={'tdee':tdee,'p':pr,'f':fa,'c':ca})
 
 @app.route('/')
 def landing():

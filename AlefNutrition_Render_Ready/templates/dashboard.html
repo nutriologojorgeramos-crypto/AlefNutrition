@@ -26,6 +26,11 @@
   </div>
 
   <div class="card section">
+    <h3>Mi menú</h3>
+    <a class="btn ghost" href="{{ url_for('patient_plan') }}">Ver mi menú semanal</a>
+  </div>
+
+  <div class="card section">
     <h3>Subir comida (foto)</h3>
     <form method="post" enctype="multipart/form-data">
       <div class="field"><input type="file" name="meal_photo" accept="image/*" required></div>
