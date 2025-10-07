@@ -1,29 +1,38 @@
+import imghdr
 import os
 import sqlite3
 import json
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, abort, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, abort, jsonify, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 # -------- Config --------
-DATABASE = os.path.join(os.path.dirname(__file__), 'database.db')
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
+DATA_DIR = os.environ.get('DATA_DIR', '/var/data')
+os.makedirs(DATA_DIR, exist_ok=True)
+DATABASE = os.path.join(DATA_DIR, 'database.db')
+UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-this')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB
 
 # -------- Helpers --------
 def get_db():
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect(DATABASE, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA journal_mode=WAL')
     return conn
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def is_safe_image(path):
+    return imghdr.what(path) in {'png', 'jpeg', 'gif', 'webp'}
 
 def current_user():
     uid = session.get('user_id')
@@ -101,8 +110,9 @@ def build_week_plan(tdee, p_g, f_g, c_g):
             # elige 1 item y ajusta porciones simple (1.0x, 1.5x, 0.75x)
             item = random.choice(cat[slot]).copy()
             # factor de porción
-            factor = max(min(target / max(item["kcal"],1), 1.6), 0.7)
-            factor = round(factor,2)
+            raw = target / max(item["kcal"], 1)
+            raw = max(min(raw, 1.6), 0.7)
+            factor = round(raw * 4) / 4.0   # 0.75x, 1.00x, 1.25x, ...
             item["portion"] = factor
             item["kcal"] = round(item["kcal"]*factor)
             item["prot"] = round(item["prot"]*factor)
@@ -221,6 +231,10 @@ def patient_plan():
 def landing():
     return render_template('landing.html')
 
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route('/login', methods=['GET','POST'])
 def login():
     if request.method == 'POST':
@@ -279,8 +293,11 @@ def dashboard():
         return redirect(url_for('login'))
 
     # weight input
-    if request.method == 'POST' and 'weight_entry' in request.form:
-        w = float(request.form.get('weight_entry') or 0)
+    if request.method == 'POST' and 'weight_flag' in request.form:
+        try:
+            w = float(request.form.get('weight_kg') or 0)
+        except ValueError:
+            w = 0.0
         conn = get_db()
         conn.execute('INSERT INTO weights(user_id, weight_kg, created_at) VALUES (?,?,?)',
                      (user['id'], w, datetime.utcnow().isoformat()))
@@ -296,6 +313,10 @@ def dashboard():
             filename = datetime.utcnow().strftime('%Y%m%d%H%M%S') + '_' + secure_filename(file.filename)
             path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(path)
+            if not is_safe_image(path):
+                os.remove(path)
+                flash('La imagen no es válida.', 'error')
+                return redirect(url_for('dashboard'))
             rel = os.path.join('uploads', filename)
             conn = get_db()
             conn.execute('INSERT INTO meals(user_id, image_path, comment, created_at) VALUES (?,?,?,?)',
@@ -305,6 +326,7 @@ def dashboard():
             flash('Comida subida correctamente.', 'ok')
         else:
             flash('Archivo no permitido.', 'error')
+        return redirect(url_for('dashboard'))
 
     # pull data
     conn = get_db()
@@ -348,6 +370,17 @@ def admin():
 
     conn.close()
     return render_template('admin.html', data=data)
+
+@app.after_request
+def add_headers(resp):
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    resp.headers['X-Frame-Options'] = 'DENY'
+    resp.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return resp
+
+@app.route('/healthz')
+def healthz():
+    return {'ok': True}, 200
 
 # ---- PDF Export (simple) ----
 from reportlab.lib.pagesizes import A4
