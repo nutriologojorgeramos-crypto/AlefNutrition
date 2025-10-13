@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import json
-import imghdr
+from PIL import Image
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, abort, jsonify, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -30,6 +30,16 @@ def get_db():
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def is_safe_image(path):
+    try:
+        with Image.open(path) as img:
+            img.verify()
+        with Image.open(path) as img:
+            img.load()
+        return True
+    except Exception:
+        return False
 
 def current_user():
     uid = session.get('user_id')
@@ -454,7 +464,7 @@ def dashboard():
             filename = datetime.utcnow().strftime('%Y%m%d%H%M%S') + '_' + secure_filename(file.filename)
             path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(path)
-            if not imghdr.what(path):
+            if not is_safe_image(path):
                 os.remove(path)
                 flash('El archivo cargado no es una imagen válida.', 'error')
             else:
