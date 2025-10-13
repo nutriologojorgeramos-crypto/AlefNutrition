@@ -2,7 +2,18 @@
 {% block content %}
 <section class="container section">
   <h2>Menú semanal — {{ patient.name or patient.email }}</h2>
-  <p class="lead">Objetivo diario: TDEE {{ calc.tdee }} kcal · Prot {{ calc.p }} g · Grasa {{ calc.f }} g · CHO {{ calc.c }} g</p>
+  <p class="lead">Objetivo diario: TDEE {{ '%.0f'|format(calc.tdee) }} kcal · Prot {{ '%.0f'|format(calc.p) }} g · Grasa {{ '%.0f'|format(calc.f) }} g · CHO {{ '%.0f'|format(calc.c) }} g</p>
+
+  {% if macro_note %}
+  <div class="card" style="margin-top:10px">
+    <strong>Nota del nutriólogo:</strong> {{ macro_note }}
+  </div>
+  {% endif %}
+
+  <div class="card" style="margin-top:10px">
+    <h3>Distribución sugerida por tiempo</h3>
+    <p class="status">Desayuno 25% · Comida 35% · Cena 25% · Snack 15% de la energía diaria.</p>
+  </div>
 
   {% if who == 'admin' %}
   <form method="post" class="form card">
@@ -16,13 +27,13 @@
       <div class="card" style="margin-top:14px">
         <h3>Día {{ loop.index }}</h3>
         <table class="table">
-          <tr><th>Tiempo</th><th>Comida</th><th>Porción</th><th>Kcal</th><th>P</th><th>C</th><th>G</th></tr>
+          <tr><th>Tiempo</th><th>Comida</th><th>Porción sugerida</th><th>Kcal</th><th>P</th><th>C</th><th>G</th></tr>
           {% for slot in ["desayuno","comida","cena","snack"] %}
             {% set it = day[slot] %}
             <tr>
               <td>{{ slot|capitalize }}</td>
               <td>{{ it.name }}</td>
-              <td>{{ it.portion }}x</td>
+              <td>{{ '%.2f'|format(it.portion) }}× (ajustada)</td>
               <td>{{ it.kcal }}</td>
               <td>{{ it.prot }}</td>
               <td>{{ it.carb }}</td>

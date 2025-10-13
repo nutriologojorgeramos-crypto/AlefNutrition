@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="container section">
+  <h2>Macros personalizados — {{ patient.name or patient.email }}</h2>
+  <div class="card">
+    <h3>Referencia automática</h3>
+    <p class="status">BMR {{ base.bmr }} kcal · TDEE {{ '%.0f'|format(base.tdee) }} kcal · Prot {{ '%.1f'|format(base.p) }} g · Grasa {{ '%.1f'|format(base.f) }} g · CHO {{ '%.1f'|format(base.c) }} g</p>
+  </div>
+  <div class="card" style="margin-top:10px">
+    <h3>Macros activos</h3>
+    <p class="status">TDEE {{ '%.0f'|format(active.tdee) }} kcal · Prot {{ '%.1f'|format(active.p) }} g · Grasa {{ '%.1f'|format(active.f) }} g · CHO {{ '%.1f'|format(active.c) }} g</p>
+  </div>
+
+  <form method="post" class="form card" style="margin-top:10px">
+    <p>Define objetivos personalizados para el paciente. Estos valores se aplicarán en la generación de planes y en el panel del paciente.</p>
+    <div class="grid2">
+      <div class="field">
+        <label>Kcal objetivo</label>
+        <input type="number" name="kcal_target" step="1" min="800" max="6000" required value="{{ '%.0f'|format(override.kcal_target if override else active.tdee) }}">
+      </div>
+      <div class="field">
+        <label>Proteína (g)</label>
+        <input type="number" name="protein_g" step="0.1" min="20" max="500" required value="{{ '%.1f'|format(override.protein_g if override else active.p) }}">
+      </div>
+      <div class="field">
+        <label>Grasa (g)</label>
+        <input type="number" name="fat_g" step="0.1" min="10" max="400" required value="{{ '%.1f'|format(override.fat_g if override else active.f) }}">
+      </div>
+      <div class="field">
+        <label>Carbohidratos (g)</label>
+        <input type="number" name="carbs_g" step="0.1" min="20" max="800" required value="{{ '%.1f'|format(override.carbs_g if override else active.c) }}">
+      </div>
+    </div>
+    <div class="field">
+      <label>Nota para el paciente</label>
+      <textarea name="note" rows="3" placeholder="Instrucciones o contexto adicional">{{ override.note if override else '' }}</textarea>
+    </div>
+    <button class="btn primary" type="submit">Guardar macros</button>
+  </form>
+</section>
+{% endblock %}
