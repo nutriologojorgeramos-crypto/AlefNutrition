@@ -8,7 +8,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 # -------- Config --------
-DATA_DIR = os.environ.get('DATA_DIR', '/var/data')
+BASE_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(BASE_DIR, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 DATABASE = os.path.join(DATA_DIR, 'database.db')
 UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
