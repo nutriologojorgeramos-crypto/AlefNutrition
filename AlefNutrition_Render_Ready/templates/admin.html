@@ -12,6 +12,7 @@
           <div class="status">TDEE {{ row.calc.tdee }} kcal · Prot {{ row.calc.p }} g · Grasa {{ row.calc.f }} g · CHO {{ row.calc.c }} g</div>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <a class="btn ghost" href="{{ url_for('admin_macros', pid=p.id) }}">Editar macros</a>
           <a class="btn ghost" href="{{ url_for('admin_report', pid=p.id) }}">Descargar PDF</a>
           <a class="btn primary" href="{{ url_for('admin_plan', pid=p.id) }}">Menú semanal</a>
         </div>
@@ -37,7 +38,7 @@
           <h4>Últimas comidas</h4>
           <div class="meals">
             {% for m in row.meals %}
-              <img src="/{{ m.image_path }}" alt="meal">
+              <img src="{{ url_for('uploaded_file', filename=m.image_path.split('/')[-1]) }}" alt="meal">
             {% endfor %}
           </div>
         </div>

@@ -1,25 +1,31 @@
 import os
 import sqlite3
 import json
+import imghdr
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, abort, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, abort, jsonify, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 # -------- Config --------
-DATABASE = os.path.join(os.path.dirname(__file__), 'database.db')
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
+DATA_DIR = os.environ.get('DATA_DIR', '/var/data')
+os.makedirs(DATA_DIR, exist_ok=True)
+DATABASE = os.path.join(DATA_DIR, 'database.db')
+UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-this')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 # -------- Helpers --------
 def get_db():
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect(DATABASE, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA journal_mode=WAL')
     return conn
 
 def allowed_file(filename):
@@ -63,6 +69,33 @@ def calculate_tdee(sex, age, height_cm, weight_kg, activity, goal):
 
     return round(bmr), round(tdee), protein_g, fat_g, carbs_g
 
+def get_macros_for_user(u):
+    conn = get_db()
+    override = conn.execute(
+        'SELECT kcal_target, protein_g, fat_g, carbs_g FROM macro_overrides WHERE user_id=?',
+        (u['id'],)
+    ).fetchone()
+    conn.close()
+    if override:
+        return (
+            float(override['kcal_target'] or 0),
+            float(override['protein_g'] or 0),
+            float(override['fat_g'] or 0),
+            float(override['carbs_g'] or 0)
+        )
+    weight_val = u['weight_kg'] or 0
+    if isinstance(u, dict) and 'weight_override' in u:
+        weight_val = u['weight_override'] or weight_val
+    _, tdee, pr, fa, ca = calculate_tdee(
+        u['sex'] or 'F',
+        u['age'] or 0,
+        u['height_cm'] or 0,
+        weight_val,
+        u['activity'] or 'sedentary',
+        u['goal'] or 'maintain'
+    )
+    return float(tdee), float(pr), float(fa), float(ca)
+
 def _food_catalog():
     # catálogo simple (puedes ampliarlo luego)
     return {
@@ -101,8 +134,10 @@ def build_week_plan(tdee, p_g, f_g, c_g):
             # elige 1 item y ajusta porciones simple (1.0x, 1.5x, 0.75x)
             item = random.choice(cat[slot]).copy()
             # factor de porción
-            factor = max(min(target / max(item["kcal"],1), 1.6), 0.7)
-            factor = round(factor,2)
+            raw = target / max(item["kcal"], 1)
+            max_factor = 2.0 if tdee >= 2600 else 1.6
+            raw = max(min(raw, max_factor), 0.7)
+            factor = round(raw * 4) / 4.0
             item["portion"] = factor
             item["kcal"] = round(item["kcal"]*factor)
             item["prot"] = round(item["prot"]*factor)
@@ -165,6 +200,16 @@ def init_db():
         created_at TEXT,
         FOREIGN KEY(user_id) REFERENCES users(id)
     )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS macro_overrides(
+        user_id INTEGER UNIQUE,
+        kcal_target REAL,
+        protein_g REAL,
+        fat_g REAL,
+        carbs_g REAL,
+        note TEXT,
+        updated_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )""")
     # seed admin if not exists
     cur.execute("SELECT id FROM users WHERE email=?", ("admin@alefnutrition.com",))
     if not cur.fetchone():
@@ -177,6 +222,44 @@ init_db()
 
 # -------- Routes --------
 
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    safe_name = filename.split('/')[-1]
+    return send_from_directory(app.config['UPLOAD_FOLDER'], safe_name)
+
+@app.route('/healthz')
+def healthz():
+    return jsonify({'ok': True})
+
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'same-origin'
+    return response
+
+@app.route('/__bootstrap_admin')
+def __bootstrap_admin():
+    token = request.args.get('token')
+    if token != os.environ.get('BOOTSTRAP_TOKEN'):
+        abort(403)
+    conn = get_db()
+    conn.execute(
+        """
+          INSERT INTO users(email, password_hash, role, name, created_at)
+          VALUES (?,?,?,?,?)
+          ON CONFLICT(email) DO UPDATE SET
+            password_hash=excluded.password_hash,
+            role='admin',
+            name=excluded.name
+        """,
+        ("admin@alefnutrition.com", generate_password_hash("12345"),
+         "admin", "Nut. Jorge Ramos", datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+    return "Admin listo", 200
+
 @app.route('/admin/plan/<int:pid>', methods=['GET','POST'])
 def admin_plan(pid):
     user = current_user()
@@ -186,8 +269,8 @@ def admin_plan(pid):
     p = conn.execute('SELECT * FROM users WHERE id=?', (pid,)).fetchone()
     if not p:
         conn.close(); abort(404)
-    # calcular macros actuales
-    bmr, tdee, pr, fa, ca = calculate_tdee(p['sex'] or 'F', p['age'] or 0, p['height_cm'] or 0, p['weight_kg'] or 0, p['activity'] or 'sedentary', p['goal'] or 'maintain')
+    patient_for_macros = dict(p)
+    tdee, pr, fa, ca = get_macros_for_user(patient_for_macros)
     # POST = generar y guardar
     if request.method == 'POST':
         plan = build_week_plan(tdee, pr, fa, ca)
@@ -199,10 +282,13 @@ def admin_plan(pid):
         flash('Menú semanal generado.', 'ok')
         return redirect(url_for('admin_plan', pid=pid))
     # GET = mostrar si existe
+    override = conn.execute('SELECT note FROM macro_overrides WHERE user_id=?', (pid,)).fetchone()
     row = conn.execute('SELECT plan_json, created_at FROM mealplans WHERE user_id=? ORDER BY id DESC LIMIT 1', (pid,)).fetchone()
     conn.close()
     plan = json.loads(row['plan_json']) if row else None
-    return render_template('plan.html', who='admin', patient=p, plan=plan, calc={'tdee':tdee,'p':pr,'f':fa,'c':ca})
+    return render_template('plan.html', who='admin', patient=p, plan=plan,
+                           calc={'tdee': tdee, 'p': pr, 'f': fa, 'c': ca},
+                           macro_note=(override['note'] if override and override['note'] else None))
 
 @app.route('/plan')
 def patient_plan():
@@ -211,11 +297,77 @@ def patient_plan():
         return redirect(url_for('login'))
     conn = get_db()
     row = conn.execute('SELECT plan_json, created_at FROM mealplans WHERE user_id=? ORDER BY id DESC LIMIT 1', (u['id'],)).fetchone()
+    override = conn.execute('SELECT note FROM macro_overrides WHERE user_id=?', (u['id'],)).fetchone()
+    w_row = conn.execute('SELECT weight_kg FROM weights WHERE user_id=? ORDER BY created_at DESC LIMIT 1', (u['id'],)).fetchone()
     conn.close()
     plan = json.loads(row['plan_json']) if row else None
     # calcular macros del paciente
-    bmr, tdee, pr, fa, ca = calculate_tdee(u['sex'] or 'F', u['age'] or 0, u['height_cm'] or 0, u['weight_kg'] or 0, u['activity'] or 'sedentary', u['goal'] or 'maintain')
-    return render_template('plan.html', who='patient', patient=u, plan=plan, calc={'tdee':tdee,'p':pr,'f':fa,'c':ca})
+    patient_for_macros = dict(u)
+    if w_row:
+        patient_for_macros['weight_override'] = w_row['weight_kg']
+    tdee, pr, fa, ca = get_macros_for_user(patient_for_macros)
+    return render_template('plan.html', who='patient', patient=u, plan=plan,
+                           calc={'tdee': tdee, 'p': pr, 'f': fa, 'c': ca},
+                           macro_note=(override['note'] if override and override['note'] else None))
+
+@app.route('/admin/macros/<int:pid>', methods=['GET','POST'])
+def admin_macros(pid):
+    user = current_user()
+    if not user or user['role'] != 'admin':
+        return redirect(url_for('login'))
+    conn = get_db()
+    patient = conn.execute('SELECT * FROM users WHERE id=?', (pid,)).fetchone()
+    if not patient:
+        conn.close()
+        abort(404)
+    override = conn.execute('SELECT * FROM macro_overrides WHERE user_id=?', (pid,)).fetchone()
+    base_bmr, base_tdee, base_p, base_f, base_c = calculate_tdee(
+        patient['sex'] or 'F',
+        patient['age'] or 0,
+        patient['height_cm'] or 0,
+        patient['weight_kg'] or 0,
+        patient['activity'] or 'sedentary',
+        patient['goal'] or 'maintain'
+    )
+    if request.method == 'POST':
+        try:
+            kcal = float(request.form.get('kcal_target') or 0)
+            prot = float(request.form.get('protein_g') or 0)
+            fat = float(request.form.get('fat_g') or 0)
+            carb = float(request.form.get('carbs_g') or 0)
+        except (TypeError, ValueError):
+            kcal = prot = fat = carb = 0
+        note = (request.form.get('note') or '').strip()
+        if min(kcal, prot, fat, carb) <= 0:
+            flash('Todos los valores deben ser mayores a cero.', 'error')
+        else:
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                """
+                INSERT INTO macro_overrides(user_id, kcal_target, protein_g, fat_g, carbs_g, note, updated_at)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  kcal_target=excluded.kcal_target,
+                  protein_g=excluded.protein_g,
+                  fat_g=excluded.fat_g,
+                  carbs_g=excluded.carbs_g,
+                  note=excluded.note,
+                  updated_at=excluded.updated_at
+                """,
+                (pid, kcal, prot, fat, carb, note, now)
+            )
+            conn.commit()
+            flash('Macros personalizados guardados.', 'ok')
+            return redirect(url_for('admin_macros', pid=pid))
+    conn.close()
+    active_tdee, active_p, active_f, active_c = get_macros_for_user(dict(patient))
+    return render_template(
+        'macros.html',
+        patient=patient,
+        override=override,
+        base={'bmr': base_bmr, 'tdee': base_tdee, 'p': base_p, 'f': base_f, 'c': base_c},
+        active={'tdee': active_tdee, 'p': active_p, 'f': active_f, 'c': active_c}
+    )
 
 @app.route('/')
 def landing():
@@ -279,13 +431,19 @@ def dashboard():
         return redirect(url_for('login'))
 
     # weight input
-    if request.method == 'POST' and 'weight_entry' in request.form:
-        w = float(request.form.get('weight_entry') or 0)
-        conn = get_db()
-        conn.execute('INSERT INTO weights(user_id, weight_kg, created_at) VALUES (?,?,?)',
-                     (user['id'], w, datetime.utcnow().isoformat()))
-        conn.commit()
-        conn.close()
+    if request.method == 'POST' and 'weight_flag' in request.form:
+        try:
+            w = float(request.form.get('weight_kg') or 0)
+        except (TypeError, ValueError):
+            w = 0.0
+        if w > 0:
+            conn = get_db()
+            conn.execute('INSERT INTO weights(user_id, weight_kg, created_at) VALUES (?,?,?)',
+                         (user['id'], w, datetime.utcnow().isoformat()))
+            conn.commit()
+            conn.close()
+        else:
+            flash('Ingresa un peso válido.', 'error')
         return redirect(url_for('dashboard'))
 
     # meals upload
@@ -296,13 +454,17 @@ def dashboard():
             filename = datetime.utcnow().strftime('%Y%m%d%H%M%S') + '_' + secure_filename(file.filename)
             path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(path)
-            rel = os.path.join('uploads', filename)
-            conn = get_db()
-            conn.execute('INSERT INTO meals(user_id, image_path, comment, created_at) VALUES (?,?,?,?)',
-                         (user['id'], rel, comment, datetime.utcnow().isoformat()))
-            conn.commit()
-            conn.close()
-            flash('Comida subida correctamente.', 'ok')
+            if not imghdr.what(path):
+                os.remove(path)
+                flash('El archivo cargado no es una imagen válida.', 'error')
+            else:
+                rel = filename
+                conn = get_db()
+                conn.execute('INSERT INTO meals(user_id, image_path, comment, created_at) VALUES (?,?,?,?)',
+                             (user['id'], rel, comment, datetime.utcnow().isoformat()))
+                conn.commit()
+                conn.close()
+                flash('Comida subida correctamente.', 'ok')
         else:
             flash('Archivo no permitido.', 'error')
 
@@ -313,9 +475,14 @@ def dashboard():
     conn.close()
 
     # compute tdee/macros
-    bmr, tdee, p, f, c = calculate_tdee(user['sex'] or 'F', user['age'] or 0, user['height_cm'] or 0, user['weight_kg'] or 0, user['activity'] or 'sedentary', user['goal'] or 'maintain')
+    latest_weight = weights[-1]['weight_kg'] if weights else user['weight_kg']
+    base_bmr, _, _, _, _ = calculate_tdee(user['sex'] or 'F', user['age'] or 0, user['height_cm'] or 0, latest_weight or 0, user['activity'] or 'sedentary', user['goal'] or 'maintain')
+    patient_for_macros = dict(user)
+    patient_for_macros['weight_override'] = latest_weight
+    tdee, p, f, c = get_macros_for_user(patient_for_macros)
 
-    return render_template('dashboard.html', user=user, weights=weights, meals=meals, calc={'bmr':bmr,'tdee':tdee,'p':p,'f':f,'c':c})
+    return render_template('dashboard.html', user=user, weights=weights, meals=meals,
+                           calc={'bmr': base_bmr, 'tdee': tdee, 'p': p, 'f': f, 'c': c})
 
 @app.route('/admin', methods=['GET','POST'])
 def admin():
@@ -343,7 +510,10 @@ def admin():
         last_w = ws[-1]['weight_kg'] if ws else p['weight_kg']
         notes = conn.execute('SELECT * FROM notes WHERE user_id=? ORDER BY created_at DESC LIMIT 3', (p['id'],)).fetchall()
         meals = conn.execute('SELECT * FROM meals WHERE user_id=? ORDER BY created_at DESC LIMIT 3', (p['id'],)).fetchall()
-        bmr, tdee, pr, fa, ca = calculate_tdee(p['sex'] or 'F', p['age'] or 0, p['height_cm'] or 0, last_w or 0, p['activity'] or 'sedentary', p['goal'] or 'maintain')
+        bmr, _, _, _, _ = calculate_tdee(p['sex'] or 'F', p['age'] or 0, p['height_cm'] or 0, last_w or 0, p['activity'] or 'sedentary', p['goal'] or 'maintain')
+        patient_for_macros = dict(p)
+        patient_for_macros['weight_override'] = last_w
+        tdee, pr, fa, ca = get_macros_for_user(patient_for_macros)
         data.append({'patient':p, 'weights':ws, 'last_weight':last_w, 'notes':notes, 'meals':meals, 'calc':{'bmr':bmr,'tdee':tdee,'p':pr,'f':fa,'c':ca}})
 
     conn.close()
